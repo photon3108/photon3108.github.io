@@ -1,0 +1,180 @@
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    line-height: 1.58;
+    color: rgba(0, 0, 0, 0.8);
+}
+
+#content {
+    padding: 50px;
+}
+
+#article {
+    max-width: 52.9em;
+    margin: auto;
+    padding: 25px;
+}
+
+#article img {
+    max-width: 100%;
+}
+
+#article-info {
+    display: flex;
+    padding-bottom: 10px;
+}
+
+#license-link {
+    min-width: 143px;
+    padding-left: 10px;
+}
+
+#license-image {
+    width: 100%;
+    height: 100%;
+    background-repeat: no-repeat;
+    background-size: contain;
+}
+
+a {
+    text-decoration: none;
+}
+
+#author {
+    color: rgba(0, 0, 0, 0.8);
+}
+
+#publish-time {
+    display: block;
+    color: rgba(0, 0, 0, .44);
+}
+
+h2 {
+    font-size: 1.7em;
+}
+
+h3,
+p,
+blockquote>ol {
+    font-size: 1.4em;
+}
+
+.title {
+    font-size: 2.5em;
+    margin: 0 0 25px 0;
+}
+
+code {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+p>code {
+    font-family: inherit;
+    font-size: inherit;
+    padding: 0 5px;
+    border-radius: 5px;
+}
+
+pre>code {
+    tab-size: 4;
+    font-size: 1em;
+    font-family: Menlo, Monaco, "Courier New", Courier, monospace;
+}
+
+.code-line-number {
+    color: rgba(27, 31, 35, 0.5);
+    padding-right: 10px;
+    user-select: none;
+}
+
+.code-text {
+    padding-left: 10px;
+}
+
+code>table {
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+.code-container {
+    border-radius: 10px;
+    overflow-x: auto;
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+code>table td:last-child {
+    width: 100%;
+}
+
+blockquote {
+    margin: 0;
+    border-left: 5px solid;
+    border-left-color: black;
+    /*border-left-color: #375EAB;*/
+    background-color: rgba(0, 0, 0, 0.05);
+    /*background-color: #edf6ff;*/
+    border-radius: 5px;
+}
+
+blockquote>* {
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+
+blockquote>p {
+    margin: 20px;
+}
+
+blockquote>ol {
+    margin: 5px;
+}
+
+.foot-ref>p {
+    margin: 0
+}
+
+body:before {
+    content: "desktop";
+    display: none;
+}
+
+@media screen and (max-width: 1024px) {
+    body:before {
+        content: "mobile"
+    }
+}
+
+@media screen and (max-width: 640px) {
+    p {
+        font-size: 1em;
+    }
+    h1 {
+        font-size: 1.8em;
+    }
+    code {
+        font-size: 0.625em;
+    }
+    .title {
+        font-size: 2.1em;
+    }
+    .code-container {
+        border-radius: 8px;
+    }
+    .code-line-number {
+        padding-right: 0px;
+    }
+    .code-text {
+        padding-left: 5px;
+    }
+    code> table {
+        padding-left: 5px;
+        padding-right: 5px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+    }
+    #content {
+        padding: 0px;
+    }
+}

@@ -1,0 +1,2581 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Golang Calling Convention - particle.cafe</title>
+  <link href="../css/normalize_GFyY.css" rel="stylesheet">
+  <link href="../css/article_W1ld.css" rel="stylesheet">
+  <script src="../js/toolkits_yIGF.js"></script>
+  <script src="../js/article_ByZXR.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://particle.cafe/blog/golang-calling-convention.html" />
+  <meta property="og:title" content="Golang Calling Convention" />
+  <meta property="og:description" content="How To Pass Parameters And Return Values?" />
+  <meta property="og:image" content="https://particle.cafe/image/straw-bales_29sY.jpg" />
+</head>
+
+<body>
+  <div id="content">
+    <div id="article"><div id="article-info">
+    <div>
+        <a id="author" rel="author" href="https://www.facebook.com/steven.huang.1422">Steven Huang</a>
+        <time id="publish-time">Aug 27, 2017</time>
+    </div>
+    <a id="license-link" href="https://creativecommons.org/licenses/by-nc-nd/4.0/deed.zh_TW">
+        <div id="license-image" style="background-image: url(../image/by-nc-nd_cm4g.svg)">
+        </div>
+    </a>
+</div>
+
+<div>
+    <img src="../image/straw-bales_29sY.jpg">
+</div>
+<h1 class="title">Golang Calling Convention
+</h1>
+<h1 id="h1">1. Introduction</h1>
+
+<p>寫程式的時候為了確保使用的 API 如想像般地運作，時常得追進 Standard Library <a href="https://golang.org/pkg/#stdlib" title="golang. (go1.8.3). Standard Library, Packages">[1]</a> 裡才能一探究竟，但一部份的 Golang Runtime <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime" title="golang. (2017-05-24/go1.8.3). runtime">[2]</a> 是由 Assembly Code 撰寫的，追進去的時候就是一團混亂的開始。</p>
+
+<p>這團混亂引起了我的好奇心，想要了解一下 Golang 的 Calling Convention 如何在 Functions 之間傳遞 <strong>Parameters</strong> 和 <strong>Return Values</strong>，同時也想知道 Function  前後時常出現的程式究竟有什麼功能。</p>
+
+<p>但是 Golang Compiler (gc) 透過 <code>go tool compile -S</code> 產出的 Assembly Code 還滿有 Plan 9 Assembler <a href="https://9p.io/sys/doc/asm.html" title="Rob Pike. (?). A Manual for the Plan 9 assembler.">[3]</a> 風格的，一方面跟 Plan 9 Assembler 不熟，另一方面是沒辦法透過 GDB 對照著執行檔做單步追蹤，這樣就有點像是讀了技術文，卻很少透過實做去實踐想法一樣，始終是有點差距的，為了縮短想像與實際上的落差，直接透過 GDB 來觀察 <strong>x86-64</strong> Assembly Code 還是比較方便的。</p>
+
+<blockquote>
+<p>「A Quick Guide to Go&rsquo;s Assembler」<a href="https://golang.org/doc/asm" title="golang.org. (2017-05/go1.8.3). A Quick Guide to Go's Assembler.">[4]</a> 有介紹 gc 的 Assembly Language。</p>
+</blockquote>
+
+<blockquote>
+<p>我的目標不是透過窮舉所有的組合去得到結果，而是透過觀察匯聚出一些概念。</p>
+</blockquote>
+
+<blockquote>
+<p>請保持獨立思考，若是發現有錯誤的地方，歡迎寄信到網頁左上角的 FB 訊息裡。如果我回很慢的話，可能是有事情正在忙碌中，請多包涵。</p>
+</blockquote>
+
+<hr />
+
+<p>接下來會從 <code>main()</code> 開始一部份一部份地拆解和觀察，如果遇到標示 <a href="https://en.wikipedia.org/wiki/TL;DR" title="Wikipedia. (2017-08-17). TL;DR"><strong>TL;DR</strong></a> 的地方，代表真的很長，可以選擇稍後再閱讀。</p>
+
+<h1 id="h2">2. main()</h1>
+
+<p><code>main()</code> 作為程式的進入點，是讓人感覺有點特別的，先來觀察一下 <code>main()</code> 本人好了。</p>
+
+<pre class="code-container"><code class="code language-go"><table><tbody>
+<tr>
+<td class="code-line-number">1</td>
+<td class="code-text" >// example1.go</td>
+</tr>
+<tr>
+<td class="code-line-number">2</td>
+<td class="code-text" >package main</td>
+</tr>
+<tr>
+<td class="code-line-number">3</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">4</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">func main() {</td>
+</tr>
+<tr>
+<td class="code-line-number">5</td>
+<td class="code-text" >	myFunc0()</td>
+</tr>
+<tr>
+<td class="code-line-number">6</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number">7</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">8</td>
+<td class="code-text" >func myFunc0() {</td>
+</tr>
+<tr>
+<td class="code-line-number">9</td>
+<td class="code-text" >}</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>編譯環境如下：</p>
+
+<blockquote>
+<ol>
+<li>x86-64 (AMD64) Ubuntu 16.04</li>
+<li>go1.8.3</li>
+<li>go build -gcflags &ldquo;-N -l&rdquo; example1.go </li>
+<li>objdump -S example1 &gt; example1.s </li>
+</ol>
+</blockquote>
+
+<h2 id="h2.1">2.1. Assembly Code</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >// example1.s</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >000000000044d650 &lt;main.main&gt;:</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >package main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >func main() {</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  44d650:	64 48 8b 0c 25 f8 ff 	mov    %fs:0xfffffffffffffff8,%rcx</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  44d657:	ff ff </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  44d659:	48 3b 61 10          	cmp    0x10(%rcx),%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  44d65d:	76 1a                	jbe    44d679 &lt;main.main+0x29&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:#cebbf1;">  44d65f:	48 83 ec 08          	sub    $0x8,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" style="background-color:#E0EBF5;">  44d663:	48 89 2c 24          	mov    %rbp,(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" style="background-color:#E0EBF5;">  44d667:	48 8d 2c 24          	lea    (%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >	myFunc0()</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" style="background-color:#d4f2bc;">  44d66b:	e8 10 00 00 00       	callq  44d680 &lt;main.myFunc0&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" style="background-color:#E0EBF5;">  44d670:	48 8b 2c 24          	mov    (%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" style="background-color:#cebbf1;">  44d674:	48 83 c4 08          	add    $0x8,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >  44d678:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >package main</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >func main() {</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  44d679:	e8 12 86 ff ff       	callq  445c90 &lt;runtime.morestack_noctxt&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  44d67e:	eb d0                	jmp    44d650 &lt;main.main&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">24</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">25</td>
+<td class="code-text" >000000000044d680 &lt;main.myFunc0&gt;:</td>
+</tr>
+<tr>
+<td class="code-line-number">26</td>
+<td class="code-text" >	myFunc0()</td>
+</tr>
+<tr>
+<td class="code-line-number">27</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number">28</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">29</td>
+<td class="code-text" >func myFunc0() {</td>
+</tr>
+<tr>
+<td class="code-line-number">30</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number">31</td>
+<td class="code-text" style="background-color:#d4f2bc;">  44d680:	c3                   	retq   </td>
+</tr>
+</tbody></table></code></pre>
+
+<p>在 example1.s 裡搜尋 <code>main.myFunc0</code>，很快就能找到這段程式碼了，約略地看了一下，大概可以分為 4 個區塊來觀察，分別是 Stack Pointer, Frame Pointer, Function Call, More Stack。</p>
+
+<p><strong>Stack Pointer</strong> (紫色)：<code>rsp</code> 減了 8 Bytes 之後，在 <code>retq</code> (Return) 前加了回來，目的應該是為了還原 <code>rsp</code>，讓 <code>retq</code> 可以得到存入 Stack 的返回位址，進而回到 <code>main.main</code> 的 Caller，當然，這一減一加之間清空了這段的 Stack，也呈現出 Stack 不必額外做管理 (e.g. Garbage Collection) 就能回收記憶體的優點。</p>
+
+<p><strong>Frame Pointer</strong> (藍色)：透過 <code>mov</code> 將舊的 <code>rbp</code> 存入 <code>rsp</code>，並將存有舊 <code>rbp</code> 的這格 <code>rsp</code> 位址作為新的 <code>rbp</code>，新的 <code>rbp</code> 代表新的 Frame 就此展開；在清空這段 Stack 之前再一次透過 <code>mov</code> 將舊的 <code>rbp</code> 取回，藉此回到上一個 Frame，除了Frame 的變動之外，目前沒有使用到 <code>rbp</code> 的跡象。</p>
+
+<p><strong>Function Call</strong> (綠色)：如同預期般地 <code>callq</code> (Call) 了 <code>myFunc0</code> 的記憶體位址 (0x44d680)，進入 <code>myFunc0</code> 後就 <code>retq</code> 了。</p>
+
+<p><strong>More Stack</strong> (黃色)：將黃色的部份剪到 <a href="#h2.2">§2.2</a> 來看。</p>
+
+<h2 id="h2.2">2.2. More Stack</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >// example1.s</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >000000000044d650 &lt;main.main&gt;:</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  44d650:	64 48 8b 0c 25 f8 ff 	mov    %fs:0xfffffffffffffff8,%rcx</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  44d657:	ff ff </td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  44d659:	48 3b 61 10          	cmp    0x10(%rcx),%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  44d65d:	76 1a                	jbe    44d679 &lt;main.main+0x29&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  44d679:	e8 12 86 ff ff       	callq  445c90 &lt;runtime.morestack_noctxt&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  44d67e:	eb d0                	jmp    44d650 &lt;main.main&gt;</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>這裡看起來像是有一個迴圈！，<code>mov</code> 將某一個 Data Structure 的位址存進了 <code>rcx</code>，並將此 Data Structure 裡的一個成員 (Offset 0x10) 與 <code>rsp</code> 進行 <code>cmp</code> (Compare)。</p>
+
+<blockquote>
+<p>這個 Data Structure 就是 <code>g struct</code> (Goroutine)。<a href="#h4">§4</a> (<a href="https://en.wikipedia.org/wiki/TL;DR" title="Wikipedia. (2017-08-17). TL;DR"><strong>TL;DR</strong></a>)</p>
+</blockquote>
+
+<p>由於 <code>cmp</code> 在 AT&amp;T Syntax 是後者減掉前者 <a href="https://stackoverflow.com/a/14878627/2397020" title="nrz. (2013-02-14). What does 0x4 from cmp 0x4(%esi),%ebx assembly instruction mean?">[5]</a>，所以 <code>jbe</code> 的意思是：當  <code>%rsp</code> &lt;= <code>0x10(%rcx)</code> (<code>g.stackguard0</code> <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L341" title="golang. (2017-01-05/go1.8.3). g struct, runtime2.go">[6]</a>) 的時候，就 Jump 到 0x44d679。透過 runtime.<strong>morestack</strong>_noctxt (0x445c90) 加大 Goroutine 的 Stack，返回後再次 <code>jmp</code> (Jump) 回到 <code>main.main</code> 的第一行 (0x44d650)，不斷重複 (<code>cmp</code>, <code>jbe</code>) 直到 Goroutine Stack 夠大為止。</p>
+
+<blockquote>
+<p>在 x86-64 Linux 中 <code>rsp</code> 是往低位址 (往零) 長大的，這個迴圈會保持 <code>rsp</code> 高於 <code>g.stackguard0</code>。</p>
+</blockquote>
+
+<hr />
+
+<p><strong>Stack Pointer</strong>, <strong>Frame Pointer</strong>, <strong>Function Call</strong>, <strong>More Stack</strong> 這幾個區塊很常以類似的形式出現在 Function 前後作為固定班底，先認識它們，有助於將傳遞 Parameters 和 Return Values 的邏輯區分開來。</p>
+
+<p>接下來要看的是 Golang 如何在 Functions 之間傳遞與取得訊息。</p>
+
+<div>
+    <img src="../image/pass-messages_udGl.jpg">
+</div>
+
+<h1 id="h3">3. How To Pass Parameters And Return Values</h1>
+
+<pre class="code-container"><code class="code language-go"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >// example2.go</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >package main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >func main() {</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >	var l0 int = 0x3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">	l1, l2 := myFunc1(0x7, 0x11)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >	var l3 int = l1 + 0x5</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >	_ = l0 + l2 + l3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">func myFunc1(p0 int, p1 int) (int, int) {</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >	return p0, p1 + 0x13 // (r0, r1)</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >}</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 比 example1.go 增加了 Local Variables, Parameters 和 Return Values，為了簡化觀察的複雜度，只使用 int <a href="https://golang.org/doc/faq#q_int_sizes" title="golang. (go1.8.3). What is the size of an int on a 64 bit machine?, Frequently Asked Questions (FAQ)">[7]</a> 作為變數型別。</p>
+
+<blockquote>
+<p>Assembly Code 的觀察過程可以參考 <a href="#h5">§5</a> (<a href="https://en.wikipedia.org/wiki/TL;DR" title="Wikipedia. (2017-08-17). TL;DR"><strong>TL;DR</strong></a>)</p>
+</blockquote>
+
+<p>將上述觀察過程中的 Stack 抽出來整理，並以 <code>rbp</code> 作為 Stack Frame 的起始位址，則 <code>main.main</code> 的 Stack Frame 如以下著色的部份 (3~12)：</p>
+
+<pre class="code-container"><code class="code language-go"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >      rsp0             Return address of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">rbp0  -0x8 +0x40       Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" style="background-color:#cebbf1;">  l0 -0x10 +0x38 +0x40 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" style="background-color:#cebbf1;">  l1 -0x18 +0x30 +0x38 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:#cebbf1;">  l2 -0x20 +0x28 +0x30 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" style="background-color:#cebbf1;">  l3 -0x28 +0x20 +0x28 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" style="background-color:#E0EBF5;">  r1 -0x30 +0x18 +0x20 Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:#E0EBF5;">  r0 -0x38 +0x10 +0x18 Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:#d4f2bc;">  p1 -0x40  +0x8 +0x10 Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" style="background-color:#d4f2bc;">  p0 -0x48  rsp1 +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">                  rsp2 Return address of main.main</td>
+</tr>
+</tbody></table></code></pre>
+
+<blockquote>
+<p>採用的是 Stack-based Calling Convention。</p>
+</blockquote>
+
+<p>Paremters 和 Return Values 都是透過 Stack 傳遞的，不是透過 Registers。不過似乎有在討論是否要改成 Register-based Calling Convention <a href="https://github.com/golang/go/issues/18597" title="dr2chase. (2017-01-11). proposal: cmd/compile: define register-based calling conventio">[25]</a><a href="https://gist.github.com/dr2chase/5a1107998024c76de22e122ed836562d" title="David Chase. (2017-01-10). Proposal: Passing Go arguments and results in registers">[26]</a>。</p>
+
+<blockquote>
+<p>Local Variables 的排列順序與 Parameters 以及 Return Values 不同。</p>
+</blockquote>
+
+<p>在 x86-64 從高位址往低位址看，Local Variables 是照著 Source Code 的順序排列的，如 (<code>l0</code>, <code>l1</code>, <code>l2</code>, <code>l3</code>)，但 Parameters 和 Return Values 是與 Source Code 順序相反的，如 (<code>p1</code>, <code>p0</code>) 和 (<code>r1</code>, <code>r0</code>)。</p>
+
+<blockquote>
+<p>使用 Stack Pointer 做 Offset，而不是 Frame Pointer。</p>
+</blockquote>
+
+<p>其實在 go1.7 之前，預設是不會產出 Frame Pointer (<code>rbp</code>) 的 <a href="https://github.com/golang/go/issues/15840" title="Russ Cox. (2016-05-26). build: enable frame pointers by default">[8]</a>，go1.7 和 go1.8 一直以來都是對 <code>rsp</code> 做 Offset 來描述 Local Variables, Parameters 和 Return Values 等等的位址，產出 Frame Pointer 似乎單純只是為了給外部工具使用的，例如 Linux Perf, Intel VTune。</p>
+
+<h2 id="h3.1">3.1. Caller-saved Or Callee-saved</h2>
+
+<blockquote>
+<p>Frame Pointer (<code>rbp</code>) 是 Callee-saved。Stack Pointer (<code>rsp</code>) 也算它是。</p>
+</blockquote>
+
+<p>以 <code>callq</code> Instruction 作為 Caller 和 Callee 的分界來看，Callee 確實必須自己將 Caller 的 <code>rbp</code> 存在 Stack 裡，並且在 <code>retq</code> 前還原回 <code>rbp</code> <a href="#h2.1">§2.1</a>、<a href="#h5.2">§5.2</a>、<a href="#h5.6">§5.6</a>，所以確定 Frame Pointer 是 Callee-saved。</p>
+
+<p>不過 Stack Pointer 就比較不一樣了，Callee 不會將 Caller 的 <code>rsp</code> <strong>存進</strong> Stack 裡，減和加 (使用和還原) 的邏輯是以程式的形式保存在 Text Section 中，<code>rsp</code> 確實是被 Callee 保存了，但比起「Save」一詞，或許說 Stack Pointer 是 Callee-preserved 可能還比較恰如其分些，不過事實上並沒有這個詞存在就是了。</p>
+
+<hr />
+
+<p>對於 Golang Calling Convention 的觀察，到此應該已經匯聚出一些概念了，如果要再細追 Closure, Structure, Interface, Function Pointer 等等是如何傳遞的話，篇幅可能就太長了，到這裡先告一個段落好了。</p>
+
+<blockquote>
+<p>結束囉！，後續為兩個補充說明用的章節 <a href="https://en.wikipedia.org/wiki/TL;DR" title="Wikipedia. (2017-08-17). TL;DR"><strong>TL;DR</strong></a>。</p>
+</blockquote>
+
+<div>
+    <img src="../image/red-steps_5nIE.jpg">
+</div>
+
+<h1 id="h4">4. What&rsquo;s In %fs:-8?</h1>
+
+<p>這章節是探索 <code>%fs:0xfffffffffffffff8</code> 的過程，藉此銜接 <a href="#h2.2">§2.2. More Stack</a> 中 <code>rsp</code> 究竟與誰做 <code>cmp</code> 的邏輯。</p>
+
+<p>在 Linux User-space (x86-64) 裡使用 <strong>fs Register</strong> 可能是與 TLS  (Thread Local Storage) 有關的 <a href="http://wiki.osdev.org/Thread_Local_Storage#x86-64" title="osdev.org. (2014-11-18). x86-64, Thread Local Storage">[10]</a>，加上存入 <code>fs</code> 似乎只能透過 sys_arch_prctl (System Call) 才能做的到，那就使用 <code>GDB&gt; catch syscall 158</code> <a href="https://github.com/torvalds/linux/blob/master/arch/x86/entry/syscalls/syscall_64.tbl#L167" title="torvalds/linux. (2017-03-03). 64-bit system call numbers and entry vectors">[9]</a> 來捕捉看看這個 System Call 好了，隨即在 runtime·settls <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L507" title="golang. (2017-05-24/go1.8.3). runtime·settls, sys_linux_amd64.s">[11]</a> 捕捉到它，Caller 分別是 asm_amd64.s 的 <code>runtime·rt0_go</code> 與 sys_linux_amd64.s 的 <code>runtime·clone</code>。</p>
+
+<h2 id="h4.1">4.1. runtime·rt0_go</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >// example1.s</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >TEXT runtime·rt0_go(SB),NOSPLIT,$0</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">	LEAQ	runtime·m0+m_tls(SB), DI</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  445995:	48 8d 3d 64 67 05 00 	lea    0x56764(%rip),%rdi        # 49c100 &lt;runtime.m0+0x60&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">	CALL	runtime·settls(SB)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  44599c:	e8 af 3c 00 00       	callq  449650 &lt;runtime.settls&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">	LEAQ	runtime·g0(SB), CX</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  44592f:	48 8d 0d 0a 64 05 00 	lea    0x5640a(%rip),%rcx        # 49bd40 &lt;runtime.g0&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >	MOVQ	CX, g(BX)</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  445936:	64 48 89 0c 25 f8 ff 	mov    %rcx,%fs:0xfffffffffffffff8</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >  44593d:	ff ff </td>
+</tr>
+</tbody></table></code></pre>
+
+<p><code>runtime·rt0_go</code> 把 <strong>m0.tls</strong> 的位址 (不是值) 交由 <code>runtime·settls</code> 加 8 後存入了 <code>fs</code> <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/asm_amd64.s#L127" title="golang. (2017-01-05/go1.8.3). runtime·rt0_go, asm_amd64.s">[12]</a><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L503" title="golang. (2017-05-24/go1.8.3). runtime·settls, sys_linux_amd64.s">[22]</a>，<code>m0</code> 的型別是 <code>m struct</code> <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L79" title="golang. (2017-01-10/go1.8.3). proc.go">[13]</a><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L403" title="golang. (2017-01-05/go1.8.3). m struct, runtime2.go">[23]</a>，此時 <code>%fs:-8</code> 為 <code>m0.tls</code> 的位址，<code>runtime·rt0_go</code> 隨後又把 <code>runtime·g0</code> 的位址存入 <code>%fs:0xfffffffffffffff8</code> (<code>%fs:-8</code>) <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/asm_amd64.s#L141" title="golang. (2017-01-05/go1.8.3). runtime·rt0_go, asm_amd64.s">[14]</a>，這相當於是存入了 <code>m0.tls</code>，<code>m0.tls</code> 為一個 <code>[6]uintptr</code> 的陣列，所以 <code>m0.tls[0]</code> 指向了 <code>runtime·g0</code>。</p>
+
+<blockquote>
+<p><code>runtime·g0</code> 的型別是 <code>g struct</code>。<a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L80" title="golang. (2017-01-10/go1.8.3). proc.go">[15]</a><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L332" title="golang. (2017-01-05/go1.8.3). g struct, runtime2.go">[16]</a></p>
+</blockquote>
+
+<p><code>m0.tls[0]</code> 是一個 <strong>uintptr</strong>，可以用來存放指向任何型別的 Pointer，如果是用來指向與 <code>g struct</code> 完全不同型別的話，在 <a href="#h2.2">§2.2</a> 使用 <code>rcx</code> 的時候，應該會發現程式邏輯在進行異質型別的判斷，不然無法確定指向為何，但沒有，所以我猜 <code>m0.tls[0]</code> 固定指向 <strong>g struct</strong> 的可能性較高。</p>
+
+<blockquote>
+<p><code>%fs:-8</code> (<code>m.tls[0]</code>) 指向 <code>g struct</code> 的可能性較高。</p>
+</blockquote>
+
+<h2 id="h4.2">4.2. runtime·clone</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >// example1.s</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >// int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >TEXT runtime·clone(SB),NOSPLIT,$0</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">	MOVQ	mp+16(FP), R8</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  4495ae:	4c 8b 44 24 18       	mov    0x18(%rsp),%r8</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">	MOVQ	gp+24(FP), R9</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  4495b3:	4c 8b 4c 24 20       	mov    0x20(%rsp),%r9</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">	LEAQ	m_tls(R8), DI</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  4495e9:	49 8d 78 60          	lea    0x60(%r8),%rdi</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">	CALL	runtime·settls(SB)</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >  4495ed:	e8 5e 00 00 00       	callq  449650 &lt;runtime.settls&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >	get_tls(CX)</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >	MOVQ	R9, g(CX)</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  4495f6:	64 4c 89 0c 25 f8 ff 	mov    %r9,%fs:0xfffffffffffffff8</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >  4495fd:	ff ff </td>
+</tr>
+</tbody></table></code></pre>
+
+<p><code>runtime·clone</code> 將第三個參數 (指向 <code>m struct</code> 的 Pointer) 存入 <code>r8</code>，也將第四個參數 (指向 <code>g struct</code> 的 Pointer) 存入 <code>r9</code>，<code>runtime·clone</code> 本身除了使用 System Call 創建 Thread 之外 <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L442" title="golang. (2017-05-24/go1.8.3). runtime·clone, sys_linux_amd64.s">[17]</a><a href="https://github.com/torvalds/linux/blob/master/arch/x86/entry/syscalls/syscall_64.tbl#L65" title="torvalds/linux. (2017-03-03). 64-bit system call numbers and entry vectors">[24]</a>，部份行為也與 <code>runtime·rt0_go</code> 類似，它也將 <code>m.tls</code> 的位址交由 <code>runtime·settls</code> 加 8 後存入 <code>fs</code>，此時 <code>%fs:-8</code> 為<code>m.tls</code>，然後又將 <code>r9</code> 也就是指向 g struct 的 Pointer 存入<code>%fs:0xfffffffffffffff8</code> (<code>%fs:-8</code>)，這也就等於是將 <code>m.tls[0]</code> 指向了 <strong>g struct</strong>。</p>
+
+<blockquote>
+<p><code>%fs:-8</code> (<code>m.tls[0]</code>) 指向了 <code>g struct</code>。</p>
+</blockquote>
+
+<p>其實到這裡就足以說明了 <code>%fs:-8</code> 指向的型別了，但實際使用 GDB 觀察的時候，<a href="#h2.2">§2.2</a> 的 <code>%fs:-8</code> 並沒有剛好指向 <code>runtime·g0</code> 或是 <code>runtime·clone</code> 的 <code>g struct</code> 參數，意思就是說，<code>%fs:-8</code> (<code>m.tls[0]</code>) 指向了一個<strong>下落不明</strong>的 <code>g struct</code>。</p>
+
+<blockquote>
+<p>好奇心的驅使，想把它找出來！ XD</p>
+</blockquote>
+
+<p>將 <a href="#h2.2">§2.2</a> <code>%fs:-8</code> 的值使用 <code>GDB&gt; info symbol</code> 反查，沒有找到這個記憶體位址對應的 Symbol；如果是使用 <code>new()</code> 在 Run-time 生出來的話，我猜 Compile-time 應該就沒有對應的 Symbol 了吧，整個 Go1.8.3 Source Code 裡只有 <code>malg()</code> 才使用 <strong>new(g)</strong> <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L2821" title="golang. (2017-01-10/go1.8.3). malg, proc.go">[18]</a>，在這裡設個 Break Point 蹲草看看，同時記下執行到 <code>main.main</code> 之前所有 <code>new(g)</code> 生出來的記憶體位址後，果然有一組與 <code>%fs:-8</code> 指的位址相同，找到了！</p>
+
+<blockquote>
+<p>在 Golang M:N Concurrency Model 中，M 個 Goroutine 在 N 個 Thread 裡流轉執行著，所以 TLS 裡指向與當時初始化不同的 <code>g struct</code> 是符合邏輯的。</p>
+</blockquote>
+
+<hr />
+
+<p>接下這個章節描述了釐清 Calling Convention 的過程，我試著將它分區並結構化來觀察，即使如此，其實還是相當繁瑣的。</p>
+
+<div>
+    <img src="../image/concrete_hbGx.jpg">
+</div>
+
+<h1 id="h5">5. Clarify The Calling Convention</h1>
+
+<p>這個章節主要是透過觀察 Assembly Code 的運作，來釐清 Golang Calling Convention 在 <a href="#h3">§3. How To Pass Parameters And Return Values</a> 上的行為。</p>
+
+<h2 id="h5.1">5.1. Assembly Code</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >// example2.s</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >000000000046ccc0 &lt;main.main&gt;:</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >package main</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >func main() {</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccc0:	64 48 8b 0c 25 f8 ff 	mov    %fs:0xfffffffffffffff8,%rcx</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccc7:	ff ff </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccc9:	48 3b 61 10          	cmp    0x10(%rcx),%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cccd:	76 59                	jbe    46cd28 &lt;main.main+0x68&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46cccf:	48 83 ec 48          	sub    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46ccd3:	48 89 6c 24 40       	mov    %rbp,0x40(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >  46ccd8:	48 8d 6c 24 40       	lea    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >	var l0 int = 0x3</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >  46ccdd:	48 c7 44 24 38 03 00 	movq   $0x3,0x38(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >  46cce4:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >	l1, l2 := myFunc1(0x7, 0x11)</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  46cce6:	48 c7 04 24 07 00 00 	movq   $0x7,(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >  46cced:	00 </td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >  46ccee:	48 c7 44 24 08 11 00 	movq   $0x11,0x8(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >  46ccf5:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" >  46cd01:	48 89 44 24 30       	mov    %rax,0x30(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">24</td>
+<td class="code-text" >  46cd06:	48 8b 44 24 18       	mov    0x18(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">25</td>
+<td class="code-text" >  46cd0b:	48 89 44 24 28       	mov    %rax,0x28(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">26</td>
+<td class="code-text" >	var l3 int = l1 + 0x5</td>
+</tr>
+<tr>
+<td class="code-line-number">27</td>
+<td class="code-text" >  46cd10:	48 8b 44 24 30       	mov    0x30(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">28</td>
+<td class="code-text" >  46cd15:	48 83 c0 05          	add    $0x5,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">29</td>
+<td class="code-text" >  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">30</td>
+<td class="code-text" >	_ = l0 + l2 + l3</td>
+</tr>
+<tr>
+<td class="code-line-number">31</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number">32</td>
+<td class="code-text" >  46cd1e:	48 8b 6c 24 40       	mov    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number">33</td>
+<td class="code-text" >  46cd23:	48 83 c4 48          	add    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number">34</td>
+<td class="code-text" >  46cd27:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number">35</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">36</td>
+<td class="code-text" >func main() {</td>
+</tr>
+<tr>
+<td class="code-line-number">37</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd28:	e8 d3 66 ff ff       	callq  463400 &lt;runtime.morestack_noctxt&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">38</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd2d:	eb 91                	jmp    46ccc0 &lt;main.main&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">39</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">40</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">func myFunc1(p0 int, p1 int) (int, int) {</td>
+</tr>
+<tr>
+<td class="code-line-number">41</td>
+<td class="code-text" >  46cd30:	48 c7 44 24 18 00 00 	movq   $0x0,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">42</td>
+<td class="code-text" >  46cd37:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">43</td>
+<td class="code-text" >  46cd39:	48 c7 44 24 20 00 00 	movq   $0x0,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">44</td>
+<td class="code-text" >  46cd40:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">45</td>
+<td class="code-text" >	return p0, p1 + 0x13 // (r0, r1)</td>
+</tr>
+<tr>
+<td class="code-line-number">46</td>
+<td class="code-text" >  46cd42:	48 8b 44 24 08       	mov    0x8(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">47</td>
+<td class="code-text" >  46cd47:	48 89 44 24 18       	mov    %rax,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">48</td>
+<td class="code-text" >  46cd4c:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">49</td>
+<td class="code-text" >  46cd51:	48 83 c0 13          	add    $0x13,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">50</td>
+<td class="code-text" >  46cd55:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">51</td>
+<td class="code-text" >  46cd5a:	c3                   	retq   </td>
+</tr>
+</tbody></table></code></pre>
+
+<p>Compile 環境與 <a href="#h2">§2</a> 相同，上述深灰色的部份可以參考 <a href="#h2.2">§2.2 More Stack</a>，就不再贅述。接下來就一行一行來觀察 Golang 如何配置 Local Variables、以及如何傳遞 Parameters 和 Return Values。</p>
+
+<h2 id="h5.2">5.2. Go Into main.main</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number">1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number">2</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  ...</td>
+</tr>
+<tr>
+<td class="code-line-number">3</td>
+<td class="code-text" >  46cccf:	48 83 ec 48          	sub    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number">4</td>
+<td class="code-text" >  46ccd3:	48 89 6c 24 40       	mov    %rbp,0x40(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">5</td>
+<td class="code-text" >  46ccd8:	48 8d 6c 24 40       	lea    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number">6</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">7</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">8</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">[rsp0]</td>
+</tr>
+</tbody></table></code></pre>
+
+<p><code>rsp0</code> 代表最一開始 <code>rsp</code> 指向的位址，並以括號括起來代表目前是以它為準，當 <code>rsp</code>一有變動就會增加後面的數字以做區別。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cccf:	48 83 ec 48          	sub    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46ccd3:	48 89 6c 24 40       	mov    %rbp,0x40(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46ccd8:	48 8d 6c 24 40       	lea    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" > rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" > -0x8</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >-0x10</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >-0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >-0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >-0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >-0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >-0x38</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >-0x40</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">-0x48 [rsp1]</td>
+</tr>
+</tbody></table></code></pre>
+
+<p><code>rsp</code> 被異動了，所以 <code>rsp0</code> +1 為 <code>rsp1</code>。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46cccf:	48 83 ec 48          	sub    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccd3:	48 89 6c 24 40       	mov    %rbp,0x40(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46ccd8:	48 8d 6c 24 40       	lea    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">rbp0  -0x8 +0x40 Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >     -0x10 +0x38</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >     -0x18 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >     -0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >     -0x28 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >     -0x30 +0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >     -0x38 +0x10</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >     -0x40  +0x8</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >     -0x48 [rsp1]</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>將 main.main Caller 的 <code>rbp</code> 存入 Stack。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  ...</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46cccf:	48 83 ec 48          	sub    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46ccd3:	48 89 6c 24 40       	mov    %rbp,0x40(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  46ccd8:	48 8d 6c 24 40       	lea    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >     -0x10 +0x38</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >     -0x18 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >     -0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >     -0x28 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >     -0x30 +0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >     -0x38 +0x10</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >     -0x40  +0x8</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >     -0x48 [rsp1]</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>將 <code>rsp1</code> + 0x40 存進 <code>rbp</code></p>
+
+<blockquote>
+<p>新的 Stack Frame 從 <code>rsp1</code> + 0x40 展開。</p>
+</blockquote>
+
+<h2 id="h5.3">5.3. Before Calling myFunc1</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >	var l0 int = 0x3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccdd:	48 c7 44 24 38 03 00 	movq   $0x3,0x38(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cce4:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >	l1, l2 := myFunc1(0x7, 0x11)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cce6:	48 c7 04 24 07 00 00 	movq   $0x7,(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cced:	00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46ccee:	48 c7 44 24 08 11 00 	movq   $0x11,0x8(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46ccf5:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >     -0x18 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x28 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x30 +0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >     -0x38 +0x10</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >     -0x40  +0x8</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" >     -0x48 [rsp1]</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 裡只有 <code>l0</code> 是 0x3。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >	var l0 int = 0x3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46ccdd:	48 c7 44 24 38 03 00 	movq   $0x3,0x38(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cce4:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >	l1, l2 := myFunc1(0x7, 0x11)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cce6:	48 c7 04 24 07 00 00 	movq   $0x7,(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cced:	00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46ccee:	48 c7 44 24 08 11 00 	movq   $0x11,0x8(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46ccf5:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >     -0x18 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x28 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x30 +0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >     -0x38 +0x10</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >     -0x40  +0x8</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  p0 -0x48 [rsp1] Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 裡只有 <code>p0</code> 是 0x7。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >	var l0 int = 0x3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46ccdd:	48 c7 44 24 38 03 00 	movq   $0x3,0x38(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cce4:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >	l1, l2 := myFunc1(0x7, 0x11)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cce6:	48 c7 04 24 07 00 00 	movq   $0x7,(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cced:	00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccee:	48 c7 44 24 08 11 00 	movq   $0x11,0x8(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46ccf5:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >     -0x18 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x28 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x30 +0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >     -0x38 +0x10</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  p1 -0x40  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" >  p0 -0x48 [rsp1] Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 裡只有 <code>p1</code> 是 0x11。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >	var l0 int = 0x3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46ccdd:	48 c7 44 24 38 03 00 	movq   $0x3,0x38(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cce4:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >	l1, l2 := myFunc1(0x7, 0x11)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cce6:	48 c7 04 24 07 00 00 	movq   $0x7,(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cced:	00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46ccee:	48 c7 44 24 08 11 00 	movq   $0x11,0x8(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46ccf5:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >rbp0  -0x8 +0x40        Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  l0 -0x10 +0x38        Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >     -0x18 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x28 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x30 +0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >     -0x38 +0x10</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >  p1 -0x40  +0x8        Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" >  p0 -0x48  rsp1        Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">24</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">                 [rsp2] Return address of main.main</td>
+</tr>
+</tbody></table></code></pre>
+
+<p><code>callq</code> 會將 0x46ccfc 作為 <code>myFunc1</code> 的返回位址 Push 進 Stack，然後 Jump 到<code>main.myFunc1</code> (0x46cd30)。</p>
+
+<h2 id="h5.4">5.4. Go Into myFunc1</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd30:	48 c7 44 24 18 00 00 	movq   $0x0,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46cd37:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd39:	48 c7 44 24 20 00 00 	movq   $0x0,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd40:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >	return p0, p1 + 0x13 // (r0, r1)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cd42:	48 8b 44 24 08       	mov    0x8(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46cd47:	48 89 44 24 18       	mov    %rax,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46cd4c:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46cd51:	48 83 c0 13          	add    $0x13,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46cd55:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >  46cd5a:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >rbp0  -0x8 +0x40        Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  l0 -0x10 +0x38 +0x40  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x18 +0x30 +0x38</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x20 +0x28 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x28 +0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">   0 -0x30 +0x18 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">   0 -0x38 +0x10 +0x18</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" >  p1 -0x40  +0x8 +0x10  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">24</td>
+<td class="code-text" >  p0 -0x48  rsp1  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">25</td>
+<td class="code-text" >                 [rsp2] Return address of main.main</td>
+</tr>
+</tbody></table></code></pre>
+
+<blockquote>
+<p>可能是因為 <code>myFunc1</code> 太過簡略了，Compiler 沒有為它建立自己的 Stack Frame。</p>
+</blockquote>
+
+<p>將 Stack 裡的兩個值設為零，目前還無法辨別為哪些變數。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46cd30:	48 c7 44 24 18 00 00 	movq   $0x0,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46cd37:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cd39:	48 c7 44 24 20 00 00 	movq   $0x0,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd40:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >	return p0, p1 + 0x13 // (r0, r1)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd42:	48 8b 44 24 08       	mov    0x8(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd47:	48 89 44 24 18       	mov    %rax,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46cd4c:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46cd51:	48 83 c0 13          	add    $0x13,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46cd55:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >  46cd5a:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >rbp0  -0x8 +0x40        Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  l0 -0x10 +0x38 +0x40  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x18 +0x30 +0x38</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x20 +0x28 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x28 +0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >   0 -0x30 +0x18 +0x20</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  r0 -0x38 +0x10 +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" >  p1 -0x40  +0x8 +0x10  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">24</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  p0 -0x48  rsp1  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">25</td>
+<td class="code-text" >                 [rsp2] Return address of main.main</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 裡只有 <code>r0</code> 被設為 <code>p0</code>。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46cd30:	48 c7 44 24 18 00 00 	movq   $0x0,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46cd37:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cd39:	48 c7 44 24 20 00 00 	movq   $0x0,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd40:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >	return p0, p1 + 0x13 // (r0, r1)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cd42:	48 8b 44 24 08       	mov    0x8(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46cd47:	48 89 44 24 18       	mov    %rax,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd4c:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd51:	48 83 c0 13          	add    $0x13,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd55:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >  46cd5a:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >rbp0  -0x8 +0x40        Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  l0 -0x10 +0x38 +0x40  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x18 +0x30 +0x38</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x20 +0x28 +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x28 +0x20 +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  r1 -0x30 +0x18 +0x20  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >  r0 -0x38 +0x10 +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  p1 -0x40  +0x8 +0x10  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">24</td>
+<td class="code-text" >  p0 -0x48  rsp1  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">25</td>
+<td class="code-text" >                 [rsp2] Return address of main.main</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 裡只有 <code>r1</code> 被設為 <code>p1</code> + 0x13。</p>
+
+<blockquote>
+<p>原來這兩個值就是 <code>r0</code> 和 <code>r1</code> 呀。</p>
+</blockquote>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46cd30:	48 c7 44 24 18 00 00 	movq   $0x0,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46cd37:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cd39:	48 c7 44 24 20 00 00 	movq   $0x0,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd40:	00 00 </td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >	return p0, p1 + 0x13 // (r0, r1)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cd42:	48 8b 44 24 08       	mov    0x8(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46cd47:	48 89 44 24 18       	mov    %rax,0x18(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46cd4c:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46cd51:	48 83 c0 13          	add    $0x13,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >  46cd55:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd5a:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >rbp0  -0x8 +0x40         Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  l0 -0x10 +0x38  +0x40  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x18 +0x30  +0x38</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >     -0x20 +0x28  +0x30</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >     -0x28 +0x20  +0x28</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >  r1 -0x30 +0x18  +0x20  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >  r0 -0x38 +0x10  +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">23</td>
+<td class="code-text" >  p1 -0x40  +0x8  +0x10  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">24</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  p0 -0x48 [rsp1]  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">25</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">                   rsp2  Return address of main.main</td>
+</tr>
+</tbody></table></code></pre>
+
+<p><code>retq</code> 會將 <code>rsp2</code> 裡的 Return Address (0x46ccfc) 從 Stack 裡 Pop 到 <code>rip</code> (Program Counter)，相當於 Pop Stack 之後立刻 Jump 回 <code>main.main</code> 的 0x46ccfc。</p>
+
+<h2 id="h5.5">5.5. After Calling myFunc1</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd01:	48 89 44 24 30       	mov    %rax,0x30(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd06:	48 8b 44 24 18       	mov    0x18(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cd0b:	48 89 44 24 28       	mov    %rax,0x28(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >	var l3 int = l1 + 0x5</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46cd10:	48 8b 44 24 30       	mov    0x30(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46cd15:	48 83 c0 05          	add    $0x5,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  l1 -0x18 +0x30  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >     -0x20 +0x28 </td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x28 +0x20 </td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >  r1 -0x30 +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  r0 -0x38 +0x10  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >  p1 -0x40  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >  p0 -0x48 [rsp1] Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 裡 <code>l1</code> 是被設為 <code>r0</code>。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cd01:	48 89 44 24 30       	mov    %rax,0x30(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd06:	48 8b 44 24 18       	mov    0x18(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd0b:	48 89 44 24 28       	mov    %rax,0x28(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >	var l3 int = l1 + 0x5</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" >  46cd10:	48 8b 44 24 30       	mov    0x30(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >  46cd15:	48 83 c0 05          	add    $0x5,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  l1 -0x18 +0x30  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  l2 -0x20 +0x28  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >     -0x28 +0x20 </td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  r1 -0x30 +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >  r0 -0x38 +0x10  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >  p1 -0x40  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >  p0 -0x48 [rsp1] Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>example2.go 裡 <code>l2</code> 是被設為 <code>r1</code>。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46ccf7:	e8 34 00 00 00       	callq  46cd30 &lt;main.myFunc1&gt;</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >  46ccfc:	48 8b 44 24 10       	mov    0x10(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >  46cd01:	48 89 44 24 30       	mov    %rax,0x30(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd06:	48 8b 44 24 18       	mov    0x18(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cd0b:	48 89 44 24 28       	mov    %rax,0x28(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >	var l3 int = l1 + 0x5</td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd10:	48 8b 44 24 30       	mov    0x30(%rsp),%rax</td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd15:	48 83 c0 05          	add    $0x5,%rax</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  l1 -0x18 +0x30  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  l2 -0x20 +0x28  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  l3 -0x28 +0x20  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >  r1 -0x30 +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">20</td>
+<td class="code-text" >  r0 -0x38 +0x10  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">21</td>
+<td class="code-text" >  p1 -0x40  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">22</td>
+<td class="code-text" >  p0 -0x48 [rsp1] Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>再來一個 <code>l3</code> 確認 <code>l1</code>, <code>l2</code> 會被包在 <code>l0</code>, <code>l3</code> 之間的 Local Variable 區域。</p>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">	_ = l0 + l2 + l3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd1e:	48 8b 6c 24 40       	mov    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cd23:	48 83 c4 48          	add    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cd27:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >  l1 -0x18 +0x30  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >  l2 -0x20 +0x28  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >  l3 -0x28 +0x20  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  r1 -0x30 +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  r0 -0x38 +0x10  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >  p1 -0x40  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >  p0 -0x48 [rsp1] Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>可能是因為最佳化的關係，被 Compiler 發現 _ (Blank Identifier) <a href="https://golang.org/doc/effective_go.html#blank" title="golang. (go1.8.3). The blank identifier, Effective Go.">[19]</a> 整串都沒有被使用到，所以就沒有產出對應的程式碼了吧。</p>
+
+<blockquote>
+<p>話說，我不是把最佳化關掉了 (-N)！，可能這太基礎了，稱不上是最佳化的一部份。</p>
+</blockquote>
+
+<h2 id="h5.6">5.6. Before Returning From main.main</h2>
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >	_ = l0 + l2 + l3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">  46cd1e:	48 8b 6c 24 40       	mov    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cd23:	48 83 c4 48          	add    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cd27:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" >      rsp0</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">rbp0  -0x8 +0x40  Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >  l0 -0x10 +0x38  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >  l1 -0x18 +0x30  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >  l2 -0x20 +0x28  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >  l3 -0x28 +0x20  Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  r1 -0x30 +0x18  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  r0 -0x38 +0x10  Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >  p1 -0x40  +0x8  Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" >  p0 -0x48 [rsp1] Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>將 <code>main.main</code> Caller 的 <code>rbp0</code> 還原到 <code>rbp</code>，代表 <code>main.main</code> 的 Stack Frame  結束並回到 Caller 的 Stack Frame 了。</p>
+
+<blockquote>
+<p>Frame Pointer (<code>rbp</code>) 是 Callee-saved。</p>
+</blockquote>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >	_ = l0 + l2 + l3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd1e:	48 8b 6c 24 40       	mov    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd23:	48 83 c4 48          	add    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" >  46cd27:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">     [rsp0]</td>
+</tr>
+<tr>
+<td class="code-line-number">11</td>
+<td class="code-text" >rbp0  -0x8  +0x40 Frame pointer of the caller of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">12</td>
+<td class="code-text" >  l0 -0x10  +0x38 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">13</td>
+<td class="code-text" >  l1 -0x18  +0x30 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">14</td>
+<td class="code-text" >  l2 -0x20  +0x28 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">15</td>
+<td class="code-text" >  l3 -0x28  +0x20 Local variable of main.main</td>
+</tr>
+<tr>
+<td class="code-line-number">16</td>
+<td class="code-text" >  r1 -0x30  +0x18 Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">17</td>
+<td class="code-text" >  r0 -0x38  +0x10 Return value of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">18</td>
+<td class="code-text" >  p1 -0x40   +0x8 Parameter of main.myFunc1</td>
+</tr>
+<tr>
+<td class="code-line-number">19</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  p0 -0x48   rsp1 Parameter of main.myFunc1</td>
+</tr>
+</tbody></table></code></pre>
+
+<p>還原 <code>rsp</code> 在 <code>main.main</code> 一開始時減掉的 0x48。</p>
+
+<blockquote>
+<p>Stack Pointer (<code>rsp</code>) 應該也算是 Callee-saved 吧，見 <a href="#h3.1">§3.1</a> 的想法。</p>
+</blockquote>
+
+<hr />
+
+<pre class="code-container"><code class="code language-asm"><table><tbody>
+<tr>
+<td class="code-line-number"> 1</td>
+<td class="code-text" >--- Assembly Code ---</td>
+</tr>
+<tr>
+<td class="code-line-number"> 2</td>
+<td class="code-text" >  46cd19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)</td>
+</tr>
+<tr>
+<td class="code-line-number"> 3</td>
+<td class="code-text" >	_ = l0 + l2 + l3</td>
+</tr>
+<tr>
+<td class="code-line-number"> 4</td>
+<td class="code-text" >}</td>
+</tr>
+<tr>
+<td class="code-line-number"> 5</td>
+<td class="code-text" >  46cd1e:	48 8b 6c 24 40       	mov    0x40(%rsp),%rbp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 6</td>
+<td class="code-text" >  46cd23:	48 83 c4 48          	add    $0x48,%rsp</td>
+</tr>
+<tr>
+<td class="code-line-number"> 7</td>
+<td class="code-text" style="background-color:rgba(0,0,0,0.1);">  46cd27:	c3                   	retq   </td>
+</tr>
+<tr>
+<td class="code-line-number"> 8</td>
+<td class="code-text" ></td>
+</tr>
+<tr>
+<td class="code-line-number"> 9</td>
+<td class="code-text" >--- Stack ---</td>
+</tr>
+<tr>
+<td class="code-line-number">10</td>
+<td class="code-text" style="background-color:rgb(240,230,140);">      rsp0 Return address of the caller of main.main</td>
+</tr>
+</tbody></table></code></pre>
+
+<p><code>retq</code> 會將 <code>rsp0</code> Pop 到 <code>rip</code> (Program Counter)，所以可以推論出 <code>rsp0</code> 存放的是 <code>main.main</code> Caller 的 Return Address。</p>
+
+<blockquote>
+<p><code>main.main</code> 的 Caller 其實就是 <code>runtime.main</code> <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L185" title="golang. (2017-01-10/go1.8.3). runtime.main, proc.go">[20]</a>。</p>
+</blockquote>
+
+<h1 id="h7">7. Reference</h1>
+<div class="foot-ref">
+<p id="foot-ref:1"><a href="https://golang.org/pkg/#stdlib">[1]</a>: golang. (go1.8.3). Standard Library, Packages</p><p id="foot-ref:2"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime">[2]</a>: golang. (2017-05-24/go1.8.3). runtime</p><p id="foot-ref:3"><a href="https://9p.io/sys/doc/asm.html">[3]</a>: Rob Pike. (?). A Manual for the Plan 9 assembler.</p><p id="foot-ref:4"><a href="https://golang.org/doc/asm">[4]</a>: golang.org. (2017-05/go1.8.3). A Quick Guide to Go's Assembler.</p><p id="foot-ref:5"><a href="https://stackoverflow.com/a/14878627/2397020">[5]</a>: nrz. (2013-02-14). What does 0x4 from cmp 0x4(%esi),%ebx assembly instruction mean?</p><p id="foot-ref:6"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L341">[6]</a>: golang. (2017-01-05/go1.8.3). g struct, runtime2.go</p><p id="foot-ref:7"><a href="https://golang.org/doc/faq#q_int_sizes">[7]</a>: golang. (go1.8.3). What is the size of an int on a 64 bit machine?, Frequently Asked Questions (FAQ)</p><p id="foot-ref:8"><a href="https://github.com/golang/go/issues/15840">[8]</a>: Russ Cox. (2016-05-26). build: enable frame pointers by default</p><p id="foot-ref:9"><a href="https://github.com/torvalds/linux/blob/master/arch/x86/entry/syscalls/syscall_64.tbl#L167">[9]</a>: torvalds/linux. (2017-03-03). 64-bit system call numbers and entry vectors</p><p id="foot-ref:10"><a href="http://wiki.osdev.org/Thread_Local_Storage#x86-64">[10]</a>: osdev.org. (2014-11-18). x86-64, Thread Local Storage</p><p id="foot-ref:11"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L507">[11]</a>: golang. (2017-05-24/go1.8.3). runtime·settls, sys_linux_amd64.s</p><p id="foot-ref:12"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/asm_amd64.s#L127">[12]</a>: golang. (2017-01-05/go1.8.3). runtime·rt0_go, asm_amd64.s</p><p id="foot-ref:13"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L79">[13]</a>: golang. (2017-01-10/go1.8.3). proc.go</p><p id="foot-ref:14"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/asm_amd64.s#L141">[14]</a>: golang. (2017-01-05/go1.8.3). runtime·rt0_go, asm_amd64.s</p><p id="foot-ref:15"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L80">[15]</a>: golang. (2017-01-10/go1.8.3). proc.go</p><p id="foot-ref:16"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L332">[16]</a>: golang. (2017-01-05/go1.8.3). g struct, runtime2.go</p><p id="foot-ref:17"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L442">[17]</a>: golang. (2017-05-24/go1.8.3). runtime·clone, sys_linux_amd64.s</p><p id="foot-ref:18"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L2821">[18]</a>: golang. (2017-01-10/go1.8.3). malg, proc.go</p><p id="foot-ref:19"><a href="https://golang.org/doc/effective_go.html#blank">[19]</a>: golang. (go1.8.3). The blank identifier, Effective Go.</p><p id="foot-ref:20"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L185">[20]</a>: golang. (2017-01-10/go1.8.3). runtime.main, proc.go</p><p id="foot-ref:21"><a href="https://en.wikipedia.org/wiki/TL;DR">[21]</a>: Wikipedia. (2017-08-17). TL;DR</p><p id="foot-ref:22"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L503">[22]</a>: golang. (2017-05-24/go1.8.3). runtime·settls, sys_linux_amd64.s</p><p id="foot-ref:23"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L403">[23]</a>: golang. (2017-01-05/go1.8.3). m struct, runtime2.go</p><p id="foot-ref:24"><a href="https://github.com/torvalds/linux/blob/master/arch/x86/entry/syscalls/syscall_64.tbl#L65">[24]</a>: torvalds/linux. (2017-03-03). 64-bit system call numbers and entry vectors</p><p id="foot-ref:25"><a href="https://github.com/golang/go/issues/18597">[25]</a>: dr2chase. (2017-01-11). proposal: cmd/compile: define register-based calling conventio</p><p id="foot-ref:26"><a href="https://gist.github.com/dr2chase/5a1107998024c76de22e122ed836562d">[26]</a>: David Chase. (2017-01-10). Proposal: Passing Go arguments and results in registers</p></div>
+</div>
+  </div>
+</body>
+
+</html>
