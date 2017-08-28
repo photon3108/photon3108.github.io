@@ -147,14 +147,15 @@ body:before {
 }
 
 @media screen and (max-width: 640px) {
-    p {
+    p,
+    blockquote>ol {
         font-size: 1em;
     }
     h1 {
         font-size: 1.8em;
     }
-    code {
-        font-size: 0.625em;
+    pre>code {
+        font-size: 0.75em;
     }
     .title {
         font-size: 2.1em;
