@@ -7,6 +7,19 @@
   <link href="../css/article_eWgo.css" rel="stylesheet">
   <script src="../js/toolkits_yIGF.js"></script>
   <script src="../js/article_ByZX.js"></script>
+  <script type="application/ld+json">
+    {
+      "@context": "http://schema.org",
+      "@type": "TechArticle",
+      "headline": "Golang Calling Convention",
+      "author": {
+        "@type": "Person",
+        "name": "Steven Huang"
+      },
+      "datePublished": "2017-08-27+08:00",
+      "image": "https://particle.cafe/image/straw-bales_29sY.jpg"
+    }
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta property="og:type" content="article" />
   <meta property="og:url" content="https://particle.cafe/blog/golang-calling-convention.html" />
@@ -17,7 +30,7 @@
 
 <body>
   <div id="content">
-    <div id="article"><div id="article-info">
+    <article id="article"><div id="article-info">
     <div>
         <a id="author" rel="author" href="https://www.facebook.com/steven.huang.1422">Steven Huang</a>
         <time id="publish-time">Aug 27, 2017</time>
@@ -2574,7 +2587,7 @@
 <h1 id="h7">7. Reference</h1>
 <div class="foot-ref">
 <p id="foot-ref:1"><a href="https://golang.org/pkg/#stdlib">[1]</a>: golang.org. (?/go1.8.3). Standard Library, Packages</p><p id="foot-ref:2"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime">[2]</a>: github.com/golang/go. (2017-05-24/go1.8.3). runtime</p><p id="foot-ref:3"><a href="https://9p.io/sys/doc/asm.html">[3]</a>: Rob Pike. (?). A Manual for the Plan 9 assembler.</p><p id="foot-ref:4"><a href="https://golang.org/doc/asm">[4]</a>: golang.org. (2017-05/go1.8.3). A Quick Guide to Go's Assembler.</p><p id="foot-ref:5"><a href="https://stackoverflow.com/a/14878627/2397020">[5]</a>: nrz. (2013-02-14). What does 0x4 from cmp 0x4(%esi),%ebx assembly instruction mean?</p><p id="foot-ref:6"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L341">[6]</a>: github.com/golang/go. (2017-01-05/go1.8.3). g struct, runtime2.go</p><p id="foot-ref:7"><a href="https://golang.org/doc/faq#q_int_sizes">[7]</a>: golang.org. (?/go1.8.3). What is the size of an int on a 64 bit machine?, Frequently Asked Questions (FAQ)</p><p id="foot-ref:8"><a href="https://github.com/golang/go/issues/15840">[8]</a>: Russ Cox. (2016-05-26). build: enable frame pointers by default</p><p id="foot-ref:9"><a href="https://github.com/torvalds/linux/blob/master/arch/x86/entry/syscalls/syscall_64.tbl#L167">[9]</a>: github.com/torvalds/linux. (2017-03-03). 64-bit system call numbers and entry vectors</p><p id="foot-ref:10"><a href="http://wiki.osdev.org/Thread_Local_Storage#x86-64">[10]</a>: osdev.org. (2014-11-18). x86-64, Thread Local Storage</p><p id="foot-ref:11"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L507">[11]</a>: github.com/golang/go. (2017-05-24/go1.8.3). runtime·settls, sys_linux_amd64.s</p><p id="foot-ref:12"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/asm_amd64.s#L127">[12]</a>: github.com/golang/go. (2017-01-05/go1.8.3). runtime·rt0_go, asm_amd64.s</p><p id="foot-ref:13"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L79">[13]</a>: github.com/golang/go. (2017-01-10/go1.8.3). proc.go</p><p id="foot-ref:14"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/asm_amd64.s#L141">[14]</a>: github.com/golang/go. (2017-01-05/go1.8.3). runtime·rt0_go, asm_amd64.s</p><p id="foot-ref:15"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L80">[15]</a>: github.com/golang/go. (2017-01-10/go1.8.3). proc.go</p><p id="foot-ref:16"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L332">[16]</a>: github.com/golang/go. (2017-01-05/go1.8.3). g struct, runtime2.go</p><p id="foot-ref:17"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L442">[17]</a>: github.com/golang/go. (2017-05-24/go1.8.3). runtime·clone, sys_linux_amd64.s</p><p id="foot-ref:18"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L2821">[18]</a>: github.com/golang/go. (2017-01-10/go1.8.3). malg, proc.go</p><p id="foot-ref:19"><a href="https://golang.org/doc/effective_go.html#blank">[19]</a>: golang.org. (?/go1.8.3). The blank identifier, Effective Go.</p><p id="foot-ref:20"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/proc.go#L185">[20]</a>: github.com/golang/go. (2017-01-10/go1.8.3). runtime.main, proc.go</p><p id="foot-ref:21"><a href="https://en.wikipedia.org/wiki/TL;DR">[21]</a>: Wikipedia. (2017-08-17). TL;DR</p><p id="foot-ref:22"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/sys_linux_amd64.s#L503">[22]</a>: github.com/golang/go. (2017-05-24/go1.8.3). runtime·settls, sys_linux_amd64.s</p><p id="foot-ref:23"><a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime/runtime2.go#L403">[23]</a>: github.com/golang/go. (2017-01-05/go1.8.3). m struct, runtime2.go</p><p id="foot-ref:24"><a href="https://github.com/torvalds/linux/blob/master/arch/x86/entry/syscalls/syscall_64.tbl#L65">[24]</a>: github.com/torvalds/linux. (2017-03-03). 64-bit system call numbers and entry vectors</p><p id="foot-ref:25"><a href="https://github.com/golang/go/issues/18597">[25]</a>: dr2chase. (2017-01-11). proposal: cmd/compile: define register-based calling conventio</p><p id="foot-ref:26"><a href="https://gist.github.com/dr2chase/5a1107998024c76de22e122ed836562d">[26]</a>: David Chase. (2017-01-10). Proposal: Passing Go arguments and results in registers</p></div>
-</div>
+</article>
   </div>
 </body>
 
