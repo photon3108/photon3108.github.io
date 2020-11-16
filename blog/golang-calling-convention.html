@@ -8,7 +8,6 @@
   <script src="../js/toolkits_yIGF.js"></script>
   <script src="../js/article_ByZX.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta property="article:author" content="https://www.facebook.com/steven.huang.1422">
   <meta property="og:locale" content="zh_TW" />
   <meta property="og:type" content="article" />
   <meta property="og:url" content="https://particle.cafe/blog/golang-calling-convention.html" />
@@ -22,7 +21,7 @@
       "headline": "Golang Calling Convention",
       "author": {
         "@type": "Person",
-        "name": "Steven Huang"
+        "name": "Chiung-Ming Huang"
       },
       "datePublished": "2017-08-27+08:00",
       "image": "https://particle.cafe/image/straw-bales_29sY.jpg"
@@ -72,7 +71,7 @@
   <div id="content">
     <article id="article"><div id="article-info">
     <div>
-        <a id="author" rel="author" href="https://www.facebook.com/steven.huang.1422">Steven Huang</a>
+        <a id="author" rel="author" href="https://github.com/photon3108">Chiung-Ming Huang</a>
         <time id="publish-time">Aug 27, 2017</time>
     </div>
     <a id="license-link" href="https://creativecommons.org/licenses/by-nc-nd/4.0/deed.zh_TW">
@@ -86,6 +85,12 @@
 </div>
 <h1 class="title">Golang Calling Convention
 </h1>
+
+<blockquote>
+	<p>Updated at Nov 16, 2020</p>
+	<p>由於 Golang 考慮在 1.16 加入 <a href="https://github.com/golang/go/issues/40724">Register-based Calling Convention</a>，我回頭打開多年前的文章，驚見當初上傳的版本不是最後校對的版本，其中對於 Caller-saved or Callee-saved 的敘述並不正確，但文章的原始檔已經遺失，一時之間無法轉成網頁，於此註明。</p>
+</blockquote>
+
 <h1 id="h1">1. Introduction</h1>
 
 <p>寫程式的時候為了確保使用的 API 如想像般地運作，時常得追進 Standard Library <a href="https://golang.org/pkg/#stdlib" title="golang.org. (?/go1.8.3). Standard Library, Packages">[1]</a> 裡才能一探究竟，但一部份的 Golang Runtime <a href="https://github.com/golang/go/blob/release-branch.go1.8/src/runtime" title="github.com/golang/go. (2017-05-24/go1.8.3). runtime">[2]</a> 是由 Assembly Code 撰寫的，追進去的時候就是一團混亂的開始。</p>
